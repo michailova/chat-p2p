@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>P2P Chat</title>
+</head>
+
+<body>
+
+<h1>P2P Chat</h1>
+
+<button id="connectButton">
+    Подключиться
+</button>
+
+<button id="joinButton">
+    Войти в room1
+</button>
+
+<button id="createOfferButton">
+    Создать Offer
+</button>
+
+<br><br>
+
+<input
+        id="messageInput"
+        type="text"
+        placeholder="Введите сообщение"
+>
+
+<button id="sendButton">
+    Отправить
+</button>
+
+<h3>Сообщения:</h3>
+
+<div id="messages"></div>
+
+
+<script>
+
+    // =========================
+    // Переменные
+    // =========================
+
+    let socket;
+    let dataChannel;
+    let role;
+
+    // =========================
+    // WebRTC
+    // =========================
+
+    const peerConnection =
+        new RTCPeerConnection({
+            iceServers: [
+                {
+                    urls: "stun:stun.l.google.com:19302"
+                }
+            ]
+        });
+    peerConnection.onconnectionstatechange = () => {
+
+        addMessage(
+            "WebRTC состояние: "
+            + peerConnection.connectionState
+        );
+    };
+
+    peerConnection.oniceconnectionstatechange = () => {
+
+        addMessage(
+            "ICE состояние: "
+            + peerConnection.iceConnectionState
+        );
+    };
+
+    // =========================
+    // Элементы страницы
+    // =========================
+
+    const connectButton =
+        document.getElementById("connectButton");
+
+    const joinButton =
+        document.getElementById("joinButton");
+
+    const createOfferButton =
+        document.getElementById("createOfferButton");
+
+    const sendButton =
+        document.getElementById("sendButton");
+
+    const messageInput =
+        document.getElementById("messageInput");
+
+    const messages =
+        document.getElementById("messages");
+
+
+    // =========================
+    // Вывод сообщения на страницу
+    // =========================
+
+    function addMessage(message) {
+
+        const element =
+            document.createElement("p");
+
+        element.textContent = message;
+
+        messages.appendChild(element);
+    }
+
+
+    // =========================
+    // WebSocket
+    // =========================
+
+    connectButton.addEventListener(
+        "click",
+        () => {
+
+            socket =
+                new WebSocket(
+                    "ws://localhost:8080"
+                );
+
+
+            socket.onopen = () => {
+
+                addMessage(
+                    "WebSocket подключён"
+                );
+            };
+
+
+            // Получаем сообщения
+            // от signaling-сервера
+
+            socket.onmessage = async (event) => {
+
+                const message =
+                    event.data;
+
+
+                addMessage(
+                    "Получено: " + message
+                );
+
+
+                // =========================
+                // JOINED
+                // =========================
+
+                if (message.startsWith("JOINED ")) {
+
+                    const parts = message.split(" ");
+
+                    role = parts[2];
+
+                    addMessage(
+                        "Мы вошли в комнату. Роль: "
+                        + role
+                    );
+
+                    if (role === "RECEIVER") {
+
+                        createOfferButton.disabled = true;
+
+                        addMessage(
+                            "Мы RECEIVER и ждём Offer"
+                        );
+                    }
+
+                    return;
+                }
+
+
+                // =========================
+                // OFFER
+                // =========================
+
+                if (message.startsWith("OFFER ")) {
+
+                    if (role !== "RECEIVER") {
+                        return;
+                    }
+
+                    const offer =
+                        JSON.parse(
+                            message.substring(6)
+                        );
+
+                    addMessage(
+                        "Получен SDP Offer"
+                    );
+
+                    await peerConnection.setRemoteDescription(
+                        offer
+                    );
+
+                    const answer =
+                        await peerConnection.createAnswer();
+
+                    await peerConnection.setLocalDescription(
+                        answer
+                    );
+
+                    socket.send(
+                        "ANSWER " +
+                        JSON.stringify(answer)
+                    );
+
+                    addMessage(
+                        "Answer отправлен"
+                    );
+
+                    return;
+                }
+
+
+                // =========================
+                // ANSWER
+                // =========================
+
+                if (message.startsWith("ANSWER ")) {
+
+                    const answer =
+                        JSON.parse(
+                            message.substring(7)
+                        );
+
+
+                    await peerConnection
+                        .setRemoteDescription(
+                            answer
+                        );
+
+
+                    addMessage(
+                        "Answer принят"
+                    );
+
+                    return;
+                }
+
+
+                // =========================
+                // ICE
+                // =========================
+
+                if (message.startsWith("ICE ")) {
+
+                    const candidate =
+                        JSON.parse(
+                            message.substring(4)
+                        );
+
+                    await peerConnection.addIceCandidate(
+                        candidate
+                    );
+
+                    addMessage(
+                        "ICE candidate принят"
+                    );
+
+                    return;
+                }
+            };
+
+
+            socket.onclose = () => {
+
+                addMessage(
+                    "WebSocket отключён"
+                );
+            };
+
+
+            socket.onerror = () => {
+
+                addMessage(
+                    "Ошибка WebSocket"
+                );
+            };
+        }
+    );
+
+
+    // =========================
+    // JOIN room1
+    // =========================
+
+    joinButton.addEventListener(
+        "click",
+        () => {
+
+            if (!socket ||
+                socket.readyState !== WebSocket.OPEN) {
+
+                addMessage(
+                    "Сначала подключитесь"
+                );
+
+                return;
+            }
+
+
+            socket.send(
+                "JOIN room1"
+            );
+
+
+            addMessage(
+                "Отправлено: JOIN room1"
+            );
+        }
+    );
+
+
+    // =========================
+    // ICE candidates
+    // =========================
+
+    peerConnection.onicecandidate =
+        (event) => {
+
+            if (!event.candidate) {
+                return;
+            }
+
+
+            if (!socket ||
+                socket.readyState !== WebSocket.OPEN) {
+
+                addMessage(
+                    "ICE найден, но WebSocket ещё не готов"
+                );
+
+                return;
+            }
+
+
+            socket.send(
+                "ICE " +
+                JSON.stringify(event.candidate)
+            );
+
+
+            addMessage(
+                "ICE candidate отправлен"
+            );
+        };
+
+
+    // =========================
+    // Создание DataChannel
+    // =========================
+
+    createOfferButton.addEventListener(
+        "click",
+        async () => {
+
+            if (!socket ||
+                socket.readyState !== WebSocket.OPEN) {
+
+                addMessage(
+                    "Сначала подключитесь"
+                );
+
+                return;
+            }
+
+
+            // Создаём P2P канал
+
+            dataChannel =
+                peerConnection.createDataChannel(
+                    "chat"
+                );
+
+
+            setupDataChannel();
+
+
+            // Создаём SDP Offer
+
+            const offer =
+                await peerConnection.createOffer();
+
+
+            await peerConnection
+                .setLocalDescription(
+                    offer
+                );
+
+
+            socket.send(
+                "OFFER " +
+                JSON.stringify(offer)
+            );
+
+
+            addMessage(
+                "Offer отправлен"
+            );
+        }
+    );
+
+
+    // =========================
+    // Приём DataChannel
+    // =========================
+
+    peerConnection.ondatachannel =
+        (event) => {
+
+            dataChannel =
+                event.channel;
+
+
+            addMessage(
+                "Получен P2P DataChannel"
+            );
+
+
+            setupDataChannel();
+        };
+
+
+    // =========================
+    // Настройка DataChannel
+    // =========================
+
+    function setupDataChannel() {
+
+        dataChannel.onopen = () => {
+
+            addMessage(
+                "P2P канал открыт"
+            );
+        };
+
+
+        dataChannel.onmessage =
+            (event) => {
+
+                addMessage(
+                    "P2P получено: "
+                    + event.data
+                );
+            };
+
+
+        dataChannel.onclose = () => {
+
+            addMessage(
+                "P2P канал закрыт"
+            );
+        };
+    }
+
+
+    // =========================
+    // Отправка сообщения
+    // =========================
+
+    sendButton.addEventListener(
+        "click",
+        () => {
+
+            const message =
+                messageInput.value;
+
+
+            if (!dataChannel ||
+                dataChannel.readyState !== "open") {
+
+                addMessage(
+                    "P2P канал ещё не открыт"
+                );
+
+                return;
+            }
+
+
+            dataChannel.send(
+                message
+            );
+
+
+            addMessage(
+                "P2P отправлено: "
+                + message
+            );
+
+
+            messageInput.value = "";
+        }
+    );
+
+</script>
+
+</body>
+
+</html>
